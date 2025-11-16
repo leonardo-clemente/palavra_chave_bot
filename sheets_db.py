@@ -59,3 +59,18 @@ def state_set(key, value):
             _ws_state.update(f"B{idx}", str(value))
             return
     _ws_state.append_row([key, str(value)])
+
+def backfill_chat_id(channel_name: str, chat_id: str):
+    """
+    Preenche chat_id em subscriptions quando channel_name bate e chat_id está vazio.
+    Ajuda a estabilizar a chave de estado no runner.
+    """
+    if not channel_name or not chat_id:
+        return
+    rows = _rows(_ws_subs)
+    normalized = channel_name.replace("@", "")
+    for idx, r in enumerate(rows, start=2):
+        rn = str(r.get("channel_name") or "").replace("@", "")
+        cid = str(r.get("chat_id") or "").strip()
+        if rn == normalized and not cid:
+            _ws_subs.update(f"E{idx}", str(chat_id))  # coluna E = chat_id
