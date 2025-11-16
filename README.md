@@ -1,2 +1,5 @@
 # palavra_chave_bot
-Bot de alertas do Telegram  Suporta expressões regulares. Suporta serviços privados. Suporta canais e grupos. Suporta públicos e privados.
+Bot de alertas do Telegram.
+Suporta expressões regulares, serviços privados, canais e grupos públicos e privados.
+
+Adaptação do código desenvolvido por backupandforkacc.
