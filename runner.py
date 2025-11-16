@@ -1,12 +1,10 @@
-# runner.py
-import os, asyncio, json
+import os, asyncio, requests
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest
 from telethon.tl.types import PeerChannel
 from telethon import utils as tg_utils
-import requests
 
 from sheets_db import list_users, list_active_subs, state_get, state_set
 from utils_ported import is_regex_str, js_to_py_re, channel_url
@@ -17,14 +15,13 @@ SESSION  = os.environ["TG_SESSION"]         # StringSession
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
 def send_bot(chat_id, text):
-    requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        data={"chat_id": str(chat_id), "text": text, "parse_mode": "Markdown",
-              "disable_web_page_preview": False},
-        timeout=30
-    )
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = {"chat_id": str(chat_id), "text": text, "parse_mode": "Markdown", "disable_web_page_preview": False}
+    r = requests.post(url, data=data, timeout=30)
+    r.raise_for_status()
+    return r.json()
 
-async def ensure_join(client, identifier):
+async def ensure_join(client, identifier: str):
     username = ""; marked = ""
     try:
         if identifier.lstrip("-").isdigit():  # -100...
@@ -41,7 +38,7 @@ async def ensure_join(client, identifier):
             uname = identifier.strip("@")
             await client(JoinChannelRequest(uname))
             ent = await client.get_entity(uname)
-            username = ent.username
+            username = ent.username or uname
             marked = tg_utils.get_peer_id(PeerChannel(ent.id))
     except Exception:
         pass
@@ -51,15 +48,18 @@ async def main():
     users = {str(u["id"]): u for u in list_users() if "id" in u}
     subs = list_active_subs()
 
-    # agrupa por canal
-    by_channel = {}
+    # agrupa assinaturas por canal
+    by_channel: dict[str, list[dict]] = {}
     for s in subs:
         ck = s.get("chat_id") or s.get("channel_name")
-        if ck: by_channel.setdefault(str(ck), []).append(s)
+        if ck:
+            by_channel.setdefault(str(ck), []).append(s)
 
     async with TelegramClient(StringSession(SESSION), API_ID, API_HASH) as client:
         for canal, assinaturas in by_channel.items():
             uname, marked = await ensure_join(client, canal)
+
+            # resolve entidade
             entity = canal
             try:
                 if canal.lstrip("-").isdigit():
@@ -73,25 +73,34 @@ async def main():
             except Exception:
                 pass
 
-            state_key = f"last_msg_id:{('@'+uname) if uname else (('c/'+str(tg_utils.resolve_id(int(marked))[0])) if marked else canal)}"
+            # checkpoint
+            if uname:
+                state_key = f"last_msg_id:@{uname}"
+            elif marked:
+                real_id, _ = tg_utils.resolve_id(int(marked))
+                state_key = f"last_msg_id:c/{real_id}"
+            else:
+                state_key = f"last_msg_id:{canal}"
+
             last = int(state_get(state_key, "0"))
             max_seen = last
 
             async for msg in client.iter_messages(entity, min_id=last, reverse=True):
                 text = (msg.message or "")
                 if msg.file and msg.file.name:
-                    text += " " + msg.file.name                           # :contentReference[oaicite:8]{index=8}
+                    text += " " + msg.file.name
 
                 for s in assinaturas:
                     uid = str(s["user_id"]); kw = s["keywords"]
-                    user = users.get(uid); 
-                    if not user: continue
+                    user = users.get(uid)
+                    if not user:
+                        continue
                     dest = user["chat_id"]
 
                     matched, hit_str = False, ""
                     if is_regex_str(kw):
                         hits = js_to_py_re(kw)(text) or []
-                        if not isinstance(hits, list): 
+                        if not isinstance(hits, list):
                             hits = [hits.group()] if hits else []
                         hits = list({("".join(h) if isinstance(h, tuple) else h) for h in hits if h})
                         matched = bool(hits); hit_str = "**" + ", ".join(hits) + "**" if hits else ""
@@ -101,9 +110,13 @@ async def main():
 
                     if matched:
                         url = channel_url(uname, marked or s.get("chat_id"), msg.id)
-                        send_bot(dest, f"[#FOUND]({url}) {hit_str}")
+                        try:
+                            send_bot(dest, f"[#FOUND]({url}) {hit_str}")
+                        except Exception:
+                            pass
 
-                if msg.id > max_seen: max_seen = msg.id
+                if msg.id > max_seen:
+                    max_seen = msg.id
 
             if max_seen > last:
                 state_set(state_key, str(max_seen))
