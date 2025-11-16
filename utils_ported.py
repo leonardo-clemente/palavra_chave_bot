@@ -1,19 +1,18 @@
-# utils_ported.py
 import regex as re
 from telethon import utils as tg_utils
 from telethon.tl.types import PeerChannel
 
 def is_regex_str(s: str) -> bool:
-    return bool(re.search(r"^/.*/[a-zA-Z]*?$", s))  # :contentReference[oaicite:4]{index=4}
+    return bool(re.search(r"^/.*/[a-zA-Z]*?$", s))
 
 def js_to_py_re(rx):
-    q, params = rx[1:].rsplit("/", 1)              # :contentReference[oaicite:5]{index=5}
+    query, params = rx[1:].rsplit("/", 1)
     fn = re.findall if "g" in params else re.search
     flags = re.I if "i" in params else 0
-    return lambda L: fn(q, L, flags=flags)
+    return lambda L: fn(query, L, flags=flags)
 
-def channel_url(username, marked_id, msg_id=None):
-    host = "https://t.me/"                          # :contentReference[oaicite:6]{index=6}
+def channel_url(username: str, marked_id: str, msg_id: int | None = None) -> str:
+    host = "https://t.me/"
     if marked_id:
         real_id, _ = tg_utils.resolve_id(int(marked_id))
         base = f"{host}c/{real_id}/"
