@@ -1,4 +1,4 @@
-import os, asyncio, time, requests
+import os, asyncio, time, requests, html
 from datetime import datetime, timedelta
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -26,16 +26,19 @@ MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "4"))
 # Bot API session + retries
 # ----------------------------
 _session = requests.Session()
-def send_bot(chat_id, text):
+def send_bot(chat_id, html_text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": str(chat_id), "text": text, "parse_mode": "Markdown", "disable_web_page_preview": False}
+    data = {
+        "chat_id": str(chat_id),
+        "text": html_text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
     for attempt in range(3):
         r = _session.post(url, data=data, timeout=20)
         if r.status_code in (429, 500, 502, 503, 504):
-            time.sleep(1 + attempt * 2)
-            continue
-        r.raise_for_status()
-        return r.json()
+            time.sleep(1 + attempt * 2); continue
+        r.raise_for_status(); return r.json()
 
 # ----------------------------
 # Join/resolve otimizado
@@ -166,7 +169,8 @@ async def process_channel(client, canal, assinaturas, users):
             known_chat_id = next((s.get("chat_id") for s in assinaturas if s.get("chat_id")), "")
             url = channel_url(uname, marked or known_chat_id, msg.id)
             for dest, kws in hits_by_user.items():
-                hit_str = "**" + ", ".join(sorted(kws)) + "**"
+                kws_html = ", ".join(sorted(html.escape(k) for k in kws))
+                send_bot(dest, f'<a href="{html.escape(url)}">#FOUND</a> <b>{kws_html}</b>')
                 try:
                     send_bot(dest, f"[#FOUND]({url}) {hit_str}")
                 except Exception:
