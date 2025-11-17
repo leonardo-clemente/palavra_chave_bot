@@ -2,8 +2,8 @@ name: telegram-runner
 
 on:
   schedule:
-    - cron: "0 */1 * * *"            # a cada 1 hora (UTC)
-  workflow_dispatch:                 # rodar manualmente pela UI
+    - cron: "0 * * * *"           # a cada 1h no minuto 0 (UTC)
+  workflow_dispatch:               # rodar manualmente pela UI
 
 concurrency:
   group: telegram-runner
@@ -20,6 +20,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # >>> Etapa de debug do gatilho e horário UTC <<<
+      - name: Show trigger info
+        run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "ref=${{ github.ref }}"
+          echo "sha=${{ github.sha }}"
+          echo "actor=${{ github.actor }}"
+          date -u
 
       - name: Debug workspace
         run: |
