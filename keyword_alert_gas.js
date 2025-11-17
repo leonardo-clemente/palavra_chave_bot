@@ -27,6 +27,87 @@ const nowStr=()=>Utilities.formatDate(new Date(),Session.getScriptTimeZone()||'U
 const parseList_=s=>String(s||'').split(/[;,]/).map(x=>x.trim()).filter(Boolean);
 const normalizeList=s=>String(s||'').replace(/，/g,',').replace(/\s*,\s*/g,',').split(',').map(x=>x.trim()).filter(Boolean); // mantida por compat.
 
+/* ======================= KEYWORD TRANSLATOR (símbolos -> regex) ======================= */
+// Mantém compatibilidade: se o usuário enviar /.../flags, usamos como está.
+function _looksLikeRegexLiteral(s){
+  return /^\/.+\/[a-z]*$/i.test(String(s || '').trim());
+}
+
+// Escapa metacaracteres de regex
+function _escapeRe(s){ return String(s).replace(/[\\.^$|?*+()[\]{}]/g, '\\$&'); }
+
+// Se a palavra contiver acento ou 'ç', expandimos aquele(s) ponto(s) para o grupo apropriado
+function _needsAccentExpansion(token){ return /[áàâãéêíóôõúüç]/i.test(token); }
+
+// Mapas de variantes (minúsculas; usamos (?i) para case-insensitive)
+const _ACCENT_GROUPS = {
+  'a':'aáàâã','á':'aáàâã','à':'aáàâã','â':'aáàâã','ã':'aáàâã',
+  'e':'eéê','é':'eéê','ê':'eéê',
+  'i':'ií','í':'ií',
+  'o':'oóôõ','ó':'oóôõ','ô':'oóôõ','õ':'oóôõ',
+  'u':'uúü','ú':'uúü','ü':'uúü',
+  'ç':'cç'
+};
+
+// Converte um token (palavra) para o núcleo de regex com expansão apenas nos pontos acentuados
+function _tokenToCorePattern(token){
+  token = String(token || '').trim();
+  if(!token) return '';
+  if(!_needsAccentExpansion(token)) return _escapeRe(token);
+
+  var out = '';
+  for(var i=0;i<token.length;i++){
+    var ch = token[i];
+    var grp = _ACCENT_GROUPS[ch.toLowerCase()];
+    if(grp) out += '[' + grp + ']';
+    else out += _escapeRe(ch);
+  }
+  return out;
+}
+
+function _wordBoundary(core){ return '\\b(?:' + core + ')\\b'; }
+
+// Converte expressão com +, -, = para uma regex PCRE-like: /(?i)^(?!...)(?=.*...)(?=.*...).*/
+function compileSymbolsExpressionToRegex(expr){
+  expr = String(expr || '').trim();
+  if(!expr) return expr;
+  if(_looksLikeRegexLiteral(expr)) return expr;     // já é regex literal => mantém
+  if(!/[+\-=]/.test(expr)) return expr;            // sem símbolos => mantém texto simples
+
+  // Dividimos por '+': cada segmento pode ter OR (=) e exclusões (-)
+  var includeGroups = []; // cada item: array de alternativas OR
+  var excludes = [];
+  var segments = expr.split('+').map(function(s){ return s.trim(); }).filter(function(x){ return !!x; });
+
+  segments.forEach(function(seg){
+    var minusParts = seg.split('-').map(function(s){ return s.trim(); }).filter(function(x){ return !!x; });
+    var base = minusParts.shift(); // parte obrigatória deste segmento (pode ter '='
+    if(base){
+      var alts = base.split('=').map(function(s){ return s.trim(); }).filter(function(x){ return !!x; });
+      includeGroups.push(alts);
+    }
+    minusParts.forEach(function(ex){ if(ex) excludes.push(ex); });
+  });
+
+  // Negativos (um único ^ no começo se houver exclusões)
+  var negativePart = '';
+  if(excludes.length){
+    negativePart = '^' + excludes.map(function(ex){
+      var core = _tokenToCorePattern(ex);
+      return '(?!.*' + _wordBoundary(core) + ')';
+    }).join('');
+  }
+
+  // Positivos (todas as AND devem aparecer)
+  var positivePart = includeGroups.map(function(group){
+    var core = group.map(_tokenToCorePattern).filter(function(x){ return !!x; }).join('|');
+    return '(?=.*' + _wordBoundary(core) + ')';
+  }).join('');
+
+  var body = negativePart + positivePart + '.*';
+  return '/(?i)' + body + '/';
+}
+
 /* ======================= SHEETS LAYER ======================= */
 function ss(){return SpreadsheetApp.openById(cfg().SPREADSHEET_ID);} // abre 1x/execução por cache do Apps Script
 
@@ -165,13 +246,24 @@ function cmdHelp_(chatId){
     '<b>Comandos</b>',
     '<code>/start</code> – Inicia e autoriza o bot',
     '<code>/help</code> – Ajuda',
-    '<code>/subscribe &lt;kw1,kw2&gt; &lt;canal1,canal2&gt;</code> – Assinar (suporta regex: <code>/exp/gi</code>)',
+    '<code>/subscribe &lt;kw1,kw2&gt; &lt;canal1,canal2&gt;</code> – Assinar (suporta regex: <code>/exp/gi</code> e sintaxe simplificada: <code>+</code> AND, <code>=</code> OR, <code>-</code> NOT)',
     '<code>/unsubscribe &lt;keyword&gt; [canal]</code> – Desativar por keyword (e canal opcional)',
     '<code>/unsubscribe_id &lt;id1,id2&gt;</code> – Desativar por IDs',
     '<code>/unsubscribe_all</code> – Desativar todas as assinaturas (confirmação)',
     '<code>/list</code> – Listar assinaturas ativas',
-    '<code>/cancel</code> – Cancelar operação'
-  ].join('\n'));
+    '<code>/cancel</code> – Cancelar operação',
+  
+    '',
+    '<b>Exemplos de sintaxe simplificada → regex</b>',
+    '<code>/subscribe +panela+ferro+fundido BenchPromos</code>',
+    '→ <code>/(?i)(?=.*\\bpanela\\b)(?=.*\\bferro\\b)(?=.*\\bfundido\\b).*/</code>',
+    '<code>/subscribe +celular+iphone=samsung BenchPromos</code>',
+    '→ <code>/(?i)(?=.*\\bcelular\\b)(?=.*\\b(iphone|samsung)\\b).*/</code>',
+    '<code>/subscribe celular+iphone-samsung BenchPromos</code>',
+    '→ <code>/(?i)^(?!.*\\bsamsung\\b)(?=.*\\bcelular\\b)(?=.*\\biphone\\b).*/</code>',
+    '<code>/subscribe fogão=cooktop+indução-atlas BenchPromos</code>',
+    '→ <code>/(?i)^(?!.*\\batlas\\b)(?=.*\\bindu[cç][aáàâã]o\\b)(?=.*\\b(cooktop|fog[aáàâã]o)\\b).*/</code>'
+].join('\n'));
 }
 
 function hasSubscription_(user_id,keyword,channel_name,chat_id){
@@ -193,7 +285,8 @@ function cmdSubscribe_(chatId,userId,args){
   if(!args){ TG.send(chatId,'Uso: <code>/subscribe kw1,kw2 canal1,canal2</code>'); return; }
   const m=args.replace(/\s+/g,' ').match(/^(\S+)\s+(.+)$/);
   if(!m){ TG.send(chatId,'Uso: <code>/subscribe kw1,kw2 canal1,canal2</code>'); return; }
-  const keywords=parseList_(m[1]), channelsRaw=parseList_(m[2]);
+  const keywordsRaw=parseList_(m[1]), channelsRaw=parseList_(m[2]);
+  const keywords=keywordsRaw.map(compileSymbolsExpressionToRegex);
   if(!keywords.length||!channelsRaw.length){ TG.send(chatId,'Uso: <code>/subscribe kw1,kw2 canal1,canal2</code>'); return; }
 
   const channels=channelsRaw.map(resolveChannel_), added=[], errors=[];
