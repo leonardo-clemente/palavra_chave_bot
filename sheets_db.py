@@ -92,11 +92,16 @@ def list_active_subs() -> List[Dict[str, Any]]:
     rows = _rows(_ws_subs)
     out: List[Dict[str, Any]] = []
     for r in rows:
-        status = r.get("status") or r.get("active") or r.get("enabled")
-        if status is not None and not _is_true(status):
-            # if there's an explicit status/active field and it's false-ish, skip
-            continue
-
+        status = r.get("status")
+        active_flag = r.get("active") or r.get("enabled")
+        
+        if status is not None:
+            if str(status).strip() != "0":
+                continue
+        elif active_flag is not None:
+            if not _is_true(active_flag):
+                continue
+                
         user_id = _safe_str(r.get("user_id") or r.get("uid") or r.get("owner_id") or "")
         keywords = _safe_str(r.get("keywords") or r.get("kw") or "")
 
